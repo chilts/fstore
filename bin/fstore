@@ -1,0 +1,216 @@
+#!/usr/bin/perl
+## ----------------------------------------------------------------------------
+
+use strict;
+use warnings;
+use Fatal qw(mkdir symlink);
+use Data::Dump qw(pp);
+use Cwd;
+use Config::Simple;
+use Getopt::Mixed "nextOption";
+use File::Touch;
+use File::Copy;
+use File::Path;
+use File::Slurp;
+use File::Basename;
+use Digest::MD5 qw(md5_hex);
+
+# use AwsSum::Amazon::S3;
+# use AwsSum::Amazon::SimpleDB;
+
+my $VERBOSE = 0;
+my $DEBUG = 0;
+
+my $dirs = [ '.fstore', '.fstore/metadata', '.fstore/hash', 'label' ];
+
+my $option_type = {
+    label => q{array},
+};
+
+## ----------------------------------------------------------------------------
+
+{
+    # get the options first, then the config file
+    my $opt = get_opt();
+    my $cfg = get_cfg( $opt );
+
+    # get the command
+    my $command = shift @ARGV;
+    unless ( defined $command ) {
+        usage( q{Specify a command.} );
+        exit 2;
+    }
+
+    # ok, let's see what command we have been given
+    if ( $command eq q{init} ) {
+        cmd_init( $cfg, $opt);
+    }
+    elsif ( $command eq q{add} ) {
+        my ($dir, @filenames) = @ARGV;
+        cmd_add( $cfg, $opt, $dir, \@filenames );
+    }
+    else {
+        usage();
+    }
+
+}
+
+## ----------------------------------------------------------------------------
+
+sub cmd_init {
+    my ($cfg, $opt) = @_;
+
+    # shouldn't have any options and cfg shouldn't matter here
+    touch( '.fstore.cfg' );
+    
+    foreach my $dir ( @$dirs ) {
+        next if -d $dir;
+        mkdir $dir;
+    }
+}
+
+sub cmd_add {
+    my ($cfg, $opt, $dir, $filenames) = @_;
+
+    # make the $dir directory
+    unless ( -d $dir ) {
+        mkdir $dir;
+    }
+
+    my $cwd = getcwd();
+
+    # loop through all the files
+    for my $filename ( @$filenames ) {
+        print "f=$filename\n";
+
+        my $basename = basename( $filename );
+        print "b=$filename\n";
+
+        unless ( -f $filename ) {
+            print STDERR qq{Filename '$filename' doesn't exist\n};
+            next;
+        }
+        my $contents = read_file( $filename );
+        my $md5 = md5_hex( $contents );
+        print "md5=$md5\n";
+
+        # move this file (if it overwrites a file we don't mind since it's the same file anyew
+
+        # if a file exists already, just remove the one we're adding (no point
+        # copying since it's the same file, same MD5)
+        if ( -f qq{.fstore/hash/$md5} ) {
+            # remove the file since we already have it in the store
+            # unlink $filename;
+        }
+        else {
+            # move the file into the store
+            copy( $filename, qq{.fstore/hash/$md5} );
+        }
+
+        # symlink to the hash file
+        if ( -l qq{$dir/$basename} ) {
+            unlink qq{$dir/$basename};
+        }
+        symlink( qq{$cwd/.fstore/hash/$md5}, qq{$dir/$basename} );
+
+        # symlink to all the labels
+        foreach my $label ( @{$opt->{label}} ) {
+            print "Trying label/$label\n";
+            unless ( -d qq{label/$label} ) {
+                mkpath( qq{label/$label} );
+            }
+
+            print "right here\n";
+
+            # symlink the file from the label directory
+            if ( -l qq{label/$label/$basename} ) {
+                print "HERE <-- we need to remove the label\n";
+            }
+            else {
+                symlink( qq{$cwd/.fstore/hash/$md5}, qq{label/$label/$basename} );
+            }
+        }
+
+        # write the metadata file
+        write_file( qq{.fstore/metadata/$md5}, qq{$md5 $dir @{$opt->{label}}} );
+    }
+}
+
+## ----------------------------------------------------------------------------
+
+sub get_opt {
+    my $opt = {};
+
+    # all the long and short option names
+    my @options = qw(
+        label=s       l>label
+        filename=s    f>filename
+        verbose
+        debug
+    );
+    Getopt::Mixed::init( join(q{ }, @options) );
+
+    # loop through all options
+    while ( my ($name, $value) = nextOption() ) {
+        if ( exists $option_type->{$name} && $option_type->{$name} eq q{array} ) {
+            push @{$opt->{$name}}, $value;
+        }
+        else {
+            $opt->{$name} = $value;
+        }
+    }
+    Getopt::Mixed::cleanup();
+
+    # make sure all the 'array's are actually arrays
+    foreach my $option_name ( grep { $option_type->{$_} eq q{array} && $_ } keys %$option_type ) { 
+        if ( defined $opt->{$option_name} ) {
+            next if ref $opt->{$option_name} eq 'ARRAY';
+            $opt->{$option_name} = [ $opt->{$option_name} ];
+        }
+        else {
+            $opt->{$option_name} = [];
+        }
+    }
+
+    # process the boolean options
+    foreach my $name ( qw(verbose debug) ) {
+        $opt->{$name} = exists $opt->{$name} ? 1 : 0;
+    }
+
+    # set these globals
+    $DEBUG = $opt->{debug};
+    $VERBOSE = $opt->{verbose};
+
+    return $opt;
+}
+
+sub get_cfg {
+    my ($option) = @_;
+
+    my $cfg = {};
+
+    # so, read either the normal config or that defined on the command line
+    my $filename = $option->{f} || $ENV{FSTORE_CFG} || q{.fstore.cfg};
+    if ( -f $filename ) {
+        Config::Simple->import_from( $filename, $cfg );
+    }
+
+    return $cfg;
+}
+
+sub usage {
+    my ($msg) = @_;
+
+    if ( defined $msg ) {
+        print "Error: $msg\n\n";
+    }
+
+    print STDERR <<"EOF";
+Usage: $0 <command> [opts...] [filenames...]
+
+See <http://github.com/appsattic/fstore/> for further information.
+Report bugs to <chilts\@appsattic.com>
+EOF
+}
+
+## ----------------------------------------------------------------------------
