@@ -1,8 +1,4 @@
--------------------------------------------------------------------------------
-
 fstore - A tool to store, sync, backup and label any kind of file.
-
--------------------------------------------------------------------------------
 
 # Concepts and Terms
 
@@ -10,7 +6,7 @@ FStore has some ideas about certain cencepts and term which will be detailed
 here. Even though this might be quite a full-on introduction, it means things
 will become clearer faster.
 
-## The Store
+## The 'Hash' Store
 
 In the top level directory of your storage area, FStore creates and uses a
 hidden directory called .fstore to save both metadata and file data related to
@@ -25,23 +21,13 @@ following command:
 
 This will create the relevant directories and set up fstore for immediate use.
 
-## Adding Files to FStore
+## Metadata
 
-To add a new file to FStore, use the following command:
+Each and every file stored with fstore has a corresponding metadata file named
+after it's MD5 and stored inside `.fstore/metadata/$md5`. It's format is:
 
-    $ fstore add --tag... path/to/file...
-
-Note: each tag should be in the format <category>:<label>. 
-
-This will add all of the files specified to FStore. By doing this it will do
-three things:
-
-* take an MD5 of the file
-* move the file into .fstore/hash/ and save it under the name of the MD5 hash
-* loop through all the tags for the following commands:
-** create a symlink from category/label/originalfilename to the hashed file
-** save a TXT file (also called the MD5) into .fstore/metadata/ which contains
-   various bits of information about the file (original filename and any labels)
+    filename <filename>
+    tags <category>:<label>...
 
 ## Tags
 
@@ -74,11 +60,31 @@ When adding labels, very similar processes occur except a 'label' directory is
 create within the existing ./labels/ directory and the symlinks to the originl
 file are created there.
 
-## Syncing with Other FStores.
+# Commands
+
+## 'add'
+
+To add a new file to FStore, use the following command:
+
+    $ fstore add --tag... path/to/file...
+
+Note: each tag should be in the format <category>:<label>. 
+
+This will add all of the files specified to FStore. By doing this it will do
+three things:
+
+* take an MD5 of the file
+* move the file into .fstore/hash/ and save it under the name of the MD5 hash
+* loop through all the tags for the following commands:
+** create a symlink from category/label/originalfilename to the hashed file
+** save a TXT file (also called the MD5) into .fstore/metadata/ which contains
+   various bits of information about the file (original filename and any labels)
+
+## 'sync'
 
 ToDo: ...
 
-## Moving Files
+## 'move'
 
 Files can be moved from one directory to another:
 
@@ -88,7 +94,7 @@ Files can be moved from one directory to another:
 This moves the file from one directory to another and optionally renames the
 file. In this case the MD5 and all labels stay the same.
 
-## Renaming Files
+## 'rename'
 
 You can rename a file within FStore by issuing the following command:
 
@@ -97,18 +103,7 @@ You can rename a file within FStore by issuing the following command:
 This renames a file within it's current directory. It's MD5 and all labels stay
 intact.
 
-## Tags
-
-Tags can be added or removed from each file by issuing the following commands:
-
-    $ fstore tag -t category/label <file...>
-    $ fstore untag -t category:label <file...>
-
-The above commands add or remove a label from the file. Symlinks inside label
-directories are also added/removed and the metadata information about the file
-is also removed.
-
-## Removing files from FStore
+## 'remove'
 
 To remove a file from FStore issue the following command:
 
@@ -126,7 +121,18 @@ To remove a file from FStore and remove it permanently, issue the following:
 The file and any associated symlinks as well as it's metadata is removed. If
 the directory no longer contains any other file, it is also deleted.
 
-## Reindexing
+## 'tag' and 'untag'
+
+Tags can be added or removed from each file by issuing the following commands:
+
+    $ fstore tag -t category/label <file...>
+    $ fstore untag -t category:label <file...>
+
+The above commands add or remove a label from the file. Symlinks inside label
+directories are also added/removed and the metadata information about the file
+is also removed.
+
+## 'reindex'
 
 If you've gone and added a load of new files to your storage area (such as
 GranniesAppleTree/{Spring,Summer,Autumn,Winter.jpg) you can get FStore to
@@ -138,7 +144,7 @@ This will find all files in ./ and below which are untracked and add them in
 the usual way, except again no labels are added. Files inside ./ are ignore
 (since they don't have a directory and all files must reside in a directory).
 
-## Syncing with other FStores
+## 'sync'
 
 FStore can sync with other FStore either locally or on other machines. The
 default process when syncing is to never delete any data, whether this is file
@@ -154,6 +160,10 @@ This will try and update the remote if it can, but will fatally fail if it
 can't. It is not up to FStore to maintain any kind of filesystem or OS
 permissions. It will generally use a plain 'ssh/scp' command to modify what it
 can (by way of the Net::SSH and Net::SCP modules).
+
+## 'fsck'
+
+# Other Things to Think About
 
 ## Duplicate Files
 
@@ -184,10 +194,6 @@ FStore is useful:
 
 Note: FStore can be used for _any_ file, it just might not be as useful nor
 what you want.
-
-
-
-
 
 ## Culling Old Files
 
