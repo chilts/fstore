@@ -21,10 +21,10 @@ use Digest::MD5 qw(md5_hex);
 my $VERBOSE = 0;
 my $DEBUG = 0;
 
-my $dirs = [ '.fstore', '.fstore/metadata', '.fstore/hash', 'label' ];
+my $dirs = [ '.fstore', '.fstore/metadata', '.fstore/hash' ];
 
 my $option_type = {
-    label => q{array},
+    tags => q{array},
 };
 
 ## ----------------------------------------------------------------------------
@@ -46,8 +46,8 @@ my $option_type = {
         cmd_init( $cfg, $opt);
     }
     elsif ( $command eq q{add} ) {
-        my ($dir, @filenames) = @ARGV;
-        cmd_add( $cfg, $opt, $dir, \@filenames );
+        my (@filenames) = @ARGV;
+        cmd_add( $cfg, $opt, \@filenames );
     }
     else {
         usage();
@@ -61,7 +61,7 @@ sub cmd_init {
     my ($cfg, $opt) = @_;
 
     # shouldn't have any options and cfg shouldn't matter here
-    touch( '.fstore.cfg' );
+    touch( '.fstore/config' );
     
     foreach my $dir ( @$dirs ) {
         next if -d $dir;
@@ -70,81 +70,135 @@ sub cmd_init {
 }
 
 sub cmd_add {
-    my ($cfg, $opt, $dir, $filenames) = @_;
+    my ($cfg, $opt, $filenames) = @_;
 
-    # make the $dir directory
-    unless ( -d $dir ) {
-        mkdir $dir;
+    # make sure we have at least one tag and one file
+    unless ( @{$opt->{tags}} ) {
+        usage( q{Provide at least one category:label.} );
+        exit 2;
+    }
+    unless ( @$filenames ) {
+        usage( q{Provide at least one file.} );
+        exit 2;
     }
 
     my $cwd = getcwd();
 
     # loop through all the files
     for my $filename ( @$filenames ) {
-        print "f=$filename\n";
-
+        # get the basename to the file
         my $basename = basename( $filename );
-        print "b=$filename\n";
 
         unless ( -f $filename ) {
-            print STDERR qq{Filename '$filename' doesn't exist\n};
+            print STDERR qq{Warning: Filename '$filename' doesn't exist\n};
             next;
         }
         my $contents = read_file( $filename );
         my $md5 = md5_hex( $contents );
-        print "md5=$md5\n";
 
-        # move this file (if it overwrites a file we don't mind since it's the same file anyew
-
-        # if a file exists already, just remove the one we're adding (no point
-        # copying since it's the same file, same MD5)
-        if ( -f qq{.fstore/hash/$md5} ) {
-            # remove the file since we already have it in the store
-            # unlink $filename;
-        }
-        else {
-            # move the file into the store
+        # if the hashed file already exists, don't do anything
+        unless ( -f qq{.fstore/hash/$md5} ) {
+            # copy the file into the store
             copy( $filename, qq{.fstore/hash/$md5} );
         }
 
-        # symlink to the hash file
-        if ( -l qq{$dir/$basename} ) {
-            unlink qq{$dir/$basename};
+        # get the current metadata (if any)
+        my $metadata = get_metadata( $md5 );
+
+        # set some defaults
+        $metadata->{filename} ||= $basename;
+        $metadata->{tags} ||= [];
+
+        # do a quick check on filename
+        unless ( $basename eq $metadata->{filename} ) {
+            print STDERR "Warning: New file '$basename' already has the name '$metadata->{filename}";
+            $metadata->{filename} = $basename;
         }
-        symlink( qq{$cwd/.fstore/hash/$md5}, qq{$dir/$basename} );
 
-        # symlink to all the labels
-        foreach my $label ( @{$opt->{label}} ) {
-            print "Trying label/$label\n";
-            unless ( -d qq{label/$label} ) {
-                mkpath( qq{label/$label} );
+        # symlink to all the tags
+        foreach my $tag ( @{$opt->{tags}} ) {
+            my ($category, $label) = split( ':', $tag, 2 );
+            unless ( -d qq{$category/$label} ) {
+                mkpath( qq{$category/$label} );
             }
-
-            print "right here\n";
 
             # symlink the file from the label directory
-            if ( -l qq{label/$label/$basename} ) {
-                print "HERE <-- we need to remove the label\n";
+            if ( -l qq{$category/$label/$basename} ) {
+                print STDERR qq{Warning: File exists - '$category/$label/$basename'\n};
             }
             else {
-                symlink( qq{$cwd/.fstore/hash/$md5}, qq{label/$label/$basename} );
+                symlink( qq{$cwd/.fstore/hash/$md5}, qq{$category/$label/$basename} );
+            }
+
+            # add this category:label to the tags
+            unless ( ref $metadata->{tags} eq 'ARRAY' ) {
+                $metadata->{tags} = [ $metadata->{tags} ];
+            }
+            if ( grep { $_ eq $tag } @{$metadata->{tags}} ) {
+                # this tag already exists in the metadata tags
+            }
+            else {
+                push @{$metadata->{tags}}, $tag;
             }
         }
 
-        # write the metadata file
-        write_file( qq{.fstore/metadata/$md5}, qq{$md5 $dir @{$opt->{label}}} );
+        # write all the new metadata now
+        write_metadata( $md5, $metadata );
+
     }
 }
 
 ## ----------------------------------------------------------------------------
+
+sub get_metadata {
+    my ($md5) = @_;
+
+    my $filename = qq{.fstore/metadata/$md5};
+    return {} unless -f $filename;
+
+    my $data = {};
+
+    my @lines = read_file( $filename );
+    chomp @lines;
+
+    foreach my $line ( @lines ) {
+        my ($field, $value) = split(/\s+/, $line, 2);
+        if ( $field eq 'filename' ) {
+            $data->{$field} = $value;
+        }
+        elsif ( $field eq 'tags' ) {
+            if ( defined $value ) {
+                @{$data->{$field}} = split(/\s+/, $value);
+            }
+            else {
+                $data->{$field} = [];
+            }
+        }
+        else {
+            print STDERR qq{Warning: Unknown field in metadata: '$field'};
+        }
+    }
+
+    return $data;
+}
+
+sub write_metadata {
+    my ($md5, $data) = @_;
+
+    # write the metadata file
+    write_file(
+        qq{.fstore/metadata/$md5},
+        qq{filename   $data->{filename}\n},
+        qq{tags   @{$data->{tags}}\n},
+    );
+}
 
 sub get_opt {
     my $opt = {};
 
     # all the long and short option names
     my @options = qw(
-        label=s       l>label
-        filename=s    f>filename
+        tags=s        t>tags
         verbose
         debug
     );
@@ -190,7 +244,7 @@ sub get_cfg {
     my $cfg = {};
 
     # so, read either the normal config or that defined on the command line
-    my $filename = $option->{f} || $ENV{FSTORE_CFG} || q{.fstore.cfg};
+    my $filename = q{.fstore/config};
     if ( -f $filename ) {
         Config::Simple->import_from( $filename, $cfg );
     }
@@ -206,10 +260,31 @@ sub usage {
     }
 
     print STDERR <<"EOF";
-Usage: $0 <command> [opts...] [filenames...]
+Usage: $0 <command> [opts...] <file...>
 
-See <http://github.com/appsattic/fstore/> for further information.
-Report bugs to <chilts\@appsattic.com>
+Commands:
+
+  * init
+  * add             -t <tags>... file...
+  * move            (ToDo)
+  * rename          (ToDo)
+  * label           (ToDo)
+  * peel            (ToDo)
+  * remove          (ToDo)
+  * reindex         (ToDo)
+  * fsck            (ToDo)
+  * sync            (ToDo) <remote>
+
+Options:
+
+  -t, --tags        tags, where <tag> := <category>:<label>
+
+Links:
+
+  * project         http://appsattic.com/project/fstore
+  * repository      https://github.com/appsattic/fstore
+
+Report bugs to <chilts\@appsattic.com>.
 EOF
 }
 
